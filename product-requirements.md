@@ -1,650 +1,511 @@
-# K8s 原生通用 PaaS 中间件管理平台
+# 基于Kubernetes的轻量级通用PaaS中间件管理平台需求文档
 
 ## 项目概述
 
-基于 K8s 构建的通用、可扩展、轻量级 PaaS 中间件管理平台，支持通过统一的 Controller 管理多种中间件的生命周期、备份、配置、监控等功能。平台采用插件化设计，新中间件只需通过插件注册配置注册即可接入。
+本项目旨在构建一个基于Kubernetes的轻量级、可扩展的通用PaaS中间件管理平台。该平台能够管理多种中间件（如Redis、Kafka、MySQL等），提供中间件的全生命周期管理、备份恢复、配置管理、监控告警等核心功能。平台通过配置驱动的方式支持扩展，用户可以轻松添加对新中间件类型的支持。平台本身保持轻量级，不引入对结构化数据库、缓存等外部中间件的依赖，所有功能实现基于Kubernetes原生能力和声明式配置。
 
-## 第一期范围
+## 专有词汇中-英对照表
 
-| 模块 | 范围 |
-|------|------|
-| **支持中间件** | PostgreSQL、Redis |
-| **生命周期管理** | 11 个核心操作（Create/Delete/Scale/Stop/Start/Restart/Failover/Upgrade 等） |
-| **状态管理** | 状态 Agent 容器采集并上报到 Annotation，Controller 同步到 CRD Status |
-| **备份恢复** | 单集群内恢复（不支持跨集群） |
-| **监控** | 对接 Prometheus，监控 Agent 暴露 Metrics（第一期暂不实现） |
-| **TLS 支持** | 集成 CertManager 自动生成证书，Secret 方式挂载 |
-| **多进程容器** | 进程管理器 + gRPC 服务，Restart 不重启 Pod |
-| **操作 Agent** | 通过 gRPC 接收 Controller 调用，执行特定中间件的配置管理和运维操作（第一期实现框架） |
-| **统一操作入口** | Operation CRD 作为所有操作的统一入口和操作日志记录 |
-| **Web UI** | 暂不实现 |
-| **插件机制** | 插件注册配置格式：ConfigMap 存储，YAML 声明中间件定义（Component、Pod模板、参数模板、操作模板），CUE 用于配置验证和约束 |
-
----
+| 中文术语 | 英文术语 |
+|---------|---------|
+| Kubernetes | K8s |
+| 自定义资源定义 | CRD (Custom Resource Definition) |
+| 运算符 | Operator |
+| 命令行接口 | CLI (Command Line Interface) |
+| 基于角色的访问控制 | RBAC (Role-Based) |
+| 传输层安全 | TLS (Transport Layer Security) |
+| 证书颁发机构 | CA (Certificate Authority) |
+| 开放容器倡议 | OCI (Open Container Initiative) |
+| 点到点恢复 | PITR (Point-In-Time Recovery) |
+| 滚动更新 | Rolling Update |
+| 蓝绿部署 | Blue-Green Deployment |
+| 原地升级 | In-place Update |
+| 应用程序编程接口 | API (Application Programming Interface) |
+| 表示状态传输 | REST (Representational State Transfer) |
+| 基本认证 | Basic Auth |
+| 开放授权 | OAuth |
+| 多因素认证 | MFA (Multi-Factor Authentication) |
 
 ## 用户需求
 
-### 用户需求 1：统一 Controller 架构
+### 用户需求1：目标用户和使用场景
 
 #### 需求详情
-- 采用统一的 Controller 架构，基于 Operator SDK 框架开发
-- Controller 负责中间件的生命周期管理、资源编排、状态同步
-- 通过插件注册配置（ConfigMap + YAML/CUE）注册新中间件插件，无需重新编译 Controller
-- Controller 本身支持高可用（Deployment 多副本部署 + Leader Election）
+
+**目标用户**：
+- 作为产品提供给外部客户使用
+
+**使用场景**：
+- 支持开发测试环境和生产环境
+
+**使用方式**：
+- 通过Web界面进行操作
+- 通过原生kubectl工具进行管理
 
 #### 技术洞察
-- **架构模式**：K8s Controller 模式，基于 **Operator SDK** 框架开发
-- **扩展方式**：ConfigMap 插件注册配置，支持热更新和重启生效两种更新模式
-- **优势**：利用 Operator SDK 的代码生成、测试框架、生命周期管理等能力，提高开发效率
-- **核心接口**：CRD Schema 定义、资源渲染、操作执行、状态采集、备份恢复、指标暴露
-- **优势**：架构简单、代码耦合度低、学习成本低
-- **参考项目**：Kubernetes sample-controller、Prometheus Operator（简化版）
 
----
+1. **Kubernetes CRD架构**：由于用户需要通过kubectl原生工具管理平台，平台必须基于Kubernetes CRD（Custom Resource Definition）实现。用户可以像管理K8s原生资源（如Deployment、Service）一样管理中间件实例。
 
-### 用户需求 2：通用中间件支持
+2. **声明式API设计**：平台应遵循Kubernetes的声明式API设计理念，用户通过YAML文件描述期望状态，平台负责将实际状态调整为期望状态。
+
+3. **Web界面与K8s API集成**：Web界面应通过Kubernetes API Server进行操作，这样可以复用K8s的认证授权机制，并确保Web界面和kubectl操作的一致性。
+
+4. **环境差异化配置**：支持开发和生产环境意味着平台需要考虑不同环境下的配置差异，如资源配额、备份策略、监控告警阈值等。
+
+### 用户需求2：部署规模和环境要求
 
 #### 需求详情
-- 平台通用设计，不限定具体中间件类型
-- 第一期支持 **PostgreSQL** 和 **Redis**
-- 支持任意中间件的所有部署模式（如 Redis 单机/主从/Sentinel/Cluster、PostgreSQL 单机/主从）
-- 支持同一中间件的多个版本（如 Redis 6.x、7.x）
-- 新中间件（甚至未来出现的中间件）只需**编写插件注册配置**即可接入，无需修改 Controller 代码
+
+**集群管理**：
+- 不需要支持多集群管理，仅管理单个Kubernetes集群
+
+**资源消耗**：
+- 平台需要保持轻量级，资源占用少
+- 没有定量的资源限制要求，但从定性角度要求轻量级
+
+**Kubernetes环境兼容性**：
+- 支持云厂商托管的Kubernetes集群（如ACK、EKS、GKE等）
+- 支持自建Kubernetes集群
+- 支持Kubernetes 1.21及以上版本
 
 #### 技术洞察
-- **多层级 CRD 设计**：采用三层 CRD 实现不同层级的抽象和职责分离
 
-| CRD 类型 | 说明 | 职责 |
-|----------|------|------|
-| **Application**（顶层） | 用户创建 PaaS 实例的入口 | 维护实例元数据，自动创建 Component 实例 |
-| **Component**（中间层） | 由 Application 自动创建 | 管理 Component 的生命周期，创建 WorkloadSet 实例 |
-| **WorkloadSet**（底层） | 由 Component 自动创建 | 管理一组工作负载（如 Pod），实现 Pod 的创建、更新、删除 |
+1. **轻量级架构设计**：为实现轻量级目标，平台应：
+   - 采用单一进程架构，避免多组件部署
+   - 使用Kubernetes原生资源（CRD、Controller）而非引入额外依赖
+   - 避免使用重量级框架和库
+   - 优化资源使用，如设置合理的资源请求和限制
 
-- **Component 与 WorkloadSet 关系**：
-  - Component 和 WorkloadSet 是 **一对多关系**（N >= 1）
-  - 每个 WorkloadSet 管理一组 Pod，这些 Pod 共享相同的 Resource 配置和中间件配置
-  - 一个 Component 可以包含多个 WorkloadSet，满足复杂部署场景
+2. **Kubernetes版本兼容性**：
+   - 使用Kubernetes client-go库，并设置合理的API版本兼容范围
+   - 避免使用过新或过旧的K8s API特性
+   - 考虑使用Kubernetes的API deprecation机制处理版本变更
 
-- **Component 与 WorkloadSet 关系示例**：
+3. **云厂商适配**：
+   - 避免依赖特定云厂商的CSI（Container Storage Interface）实现
+   - 使用通用的存储类（StorageClass）定义
+   - 支持标准的Kubernetes资源对象
 
-  **场景 1：Redis Cluster 分片**
-  - Redis Cluster 由 3 个分片组成，每个分片包含 1 主 1 从
-  - Component（如 `redis-shard`）包含 3 个 WorkloadSet
-  - 每个 WorkloadSet 管理 2 个 Pod（1 主 1 从）
-
-  **场景 2：Elasticsearch 集群**
-  - ES 集群包含多个角色（master、data、ingest 等）
-  - 角色为 master 的节点放在同一个 WorkloadSet
-  - 角色为 data 的节点放在另一个 WorkloadSet
-  - 它们都属于同一个 Component（因为 ES 节点角色可变，无法在注册配置中事先定义）
-
-- **配置方式**：通过插件注册配置声明中间件的 Application 定义、Component 定义、参数模板、操作逻辑
-  - 每种中间件定义由一个 Application 构成
-  - Application 由一个或多个 Component 构成（如 Kafka = broker + kraft，Redis = redis-node，Redis + Sentinel = redis-node + sentinel）
-  - Component 包含了 Pod 模板、中间件参数、生命周期处理等相关定义
-- **版本适配**：插件注册配置中定义版本与配置模板的映射关系
-- **最佳实践**
-  - 参考 kubeblocks 的 CRD 思路
-  - 参考 Kubernetes 原生 Controller 模式，实现层级化的状态同步和 Reconcile 逻辑
-
----
-
-### 用户需求 3：中间件生命周期管理
+### 用户需求3：中间件生命周期管理
 
 #### 需求详情
-支持以下 12 个核心生命周期操作：
 
-| 操作 | 说明 | 执行方式 |
-|------|------|----------|
-| **Create** | 创建中间件实例 | 用户请求触发 |
-| **Delete** | 删除中间件实例及关联资源 | 用户请求触发 |
-| **Vertical-Scale-Resource** | 调整 CPU/内存配置 | 用户请求触发 |
-| **Vertical-Scale-Volume** | 调整存储容量 | 用户请求触发 |
-| **Horizontal-Scale** | 调整副本数/分片数 | 用户请求触发 |
-| **Stop** | 停止中间件服务 | 用户请求触发 |
-| **Start** | 启动中间件服务 | 用户请求触发 |
-| **Restart** | 重启中间件服务（通过多进程容器实现，不重启 Pod） | 用户请求触发 |
-| **Reload** | 重载配置（不停机） | 用户请求触发 |
-| **Failover** | 故障转移（主从切换） | 全自动或用户请求 |
-| **UpgradeApp** | 升级注册配置版本（注册配置变更，如新增中间件、修改操作逻辑） | 用户请求触发 |
-| **UpgradePaaS** | 升级中间件版本（如 Redis 7.2 → 7.4，PostgreSQL 14 → 15） | 用户请求触发 |
-
-- 生命周期操作支持**全自动执行**和**用户请求触发**两种方式
-- Controller 根据 CRD 状态和实际状态自动判断是否需要执行操作
-
-#### 操作执行机制
-- **声明式配置**：插件注册配置定义每种操作的步骤和命令模板
-- **参数填充**：Controller 执行时使用实际的参数值替换模板中的占位符
-- **异步执行**：基于 K8s Workqueue 实现异步操作队列
-- **失败处理**：操作失败时记录 Condition，支持重试
-
-#### 状态管理
-- 中间件实际状态通过 Pod 中的 **Agent 容器**采集
-- Agent 容器将状态上报到 Pod 的 Annotation
-- Controller 从 Annotation 读取状态，更新到 CRD Status
-
-#### Agent 容器设计
-每种中间件 Pod 中包含以下 Agent 容器（可选/必选）：
-
-| Agent 类型 | 功能 | 必选/可选 | 第一期范围 |
-|------------|------|----------|----------|
-| **状态 Agent** | 中间件节点的主从状态、角色探测和更新、节点健康状态检测 | **必选** | 实现 |
-| **操作 Agent** | 特定中间件的配置管理、运维操作（由注册配置声明具体操作） | 可选 | 实现框架 |
-| **日志 Agent** | 日志轮转和导出 | 可选 | 暂不实现 |
-| **监控 Agent** | 暴露 Prometheus Metrics 端点 | 可选 | 暂不实现 |
-
-- **状态 Agent**：
-  - 采集中间件状态（Redis Info、PostgreSQL Status 等）
-  - 执行 Status Check（角色判断、主从状态探测、节点健康检测）
-  - 通过本地命令获取状态（如 `redis-cli role`、`pg_isready` 等）
-  - 上报状态到 Pod Annotation，供 Controller 同步到 CRD Status
-- **操作 Agent**：通过 gRPC 接收 Controller 调用，执行特定中间件的配置管理和运维操作（如权限配置、切换操作等），具体操作在注册配置中声明
-- **日志 Agent**：负责中间件日志的轮转和导出到日志系统
-- **监控 Agent**：采集并暴露中间件业务指标（QPS、延迟、连接数等）
+**核心生命周期操作**：
+1. **create**：创建中间件实例
+2. **delete**：删除中间件实例
+3. **vertical-scale-resource**：调整CPU和内存资源
+4. **vertical-scale-volume**：调整存储资源
+5. **horizontal-scale**：调整副本数量
+6. **stop/start/restart**：停止/启动/重启中间件实例
+7. **failover**：故障转移
+8. **reload**：重载配置
+9. **upgrade**：版本升级
 
 #### 技术洞察
-- **Agent 容器**：轻量级 Sidecar，与中间件容器同 Pod
-- **状态模型**：K8s 标准 Status 子资源模式
-- **操作执行**：基于 K8s Workqueue 实现异步操作队列
-- **操作 Agent**：
-  - 与多进程容器分离，独立部署
-  - 通过 gRPC 接收 Controller 调用
-  - 具体操作在注册配置中声明（如操作名称、参数模板等）
-  - 第一期实现框架，具体操作由注册配置定义
-- **失败处理**：操作失败时记录 Condition，支持重试
 
----
+1. **Kubernetes Operator模式**：
+   - 每个中间件类型对应一个CRD定义
+   - 实现Reconciliation Loop，持续监控CRD状态并调整实际状态
+   - 使用Finalizer机制处理资源清理和依赖关系
 
-### 用户需求 4：备份恢复
+2. **生命周期操作实现**：
+   - **create/delete**：通过K8s Deployment/StatefulSet管理Pod，通过Service/Ingress暴露服务
+   - **vertical-scale-resource****：修改Deployment/StatefulSet的resources字段
+   - **vertical-scale-volume**：修改PVC/StorageClass，可能需要数据迁移
+   - **horizontal-scale**：修改Deployment的replicas字段或StatefulSet的replicas字段
+   - **stop/start/restart**：通过修改Deployment的replicas为0或原值，或发送信号给进程
+   - **failover**：实现主从切换逻辑，可能需要使用Leader Election
+   - **reload**：发送SIGHUP信号或调用中间件的重载API
+   - **upgrade**：滚动更新Pod镜像，处理数据迁移和兼容性检查
+
+3. **状态机设计**：
+   - 定义中间件实例的状态：Pending、Creating、Running、Stopping、Stopped、Upgrading、Failed、Deleting等
+   - 状态转换需要考虑幂等性和错误恢复
+
+4. **依赖管理**：
+   - 使用OwnerReference建立资源间的父子关系
+   - 实现级联删除和依赖清理
+
+### 用户需求4：配置管理
 
 #### 需求详情
-支持完整的备份恢复功能：
 
-**4.1 备份类型**
-- 全量备份
-- 增量备份（第一期暂不实现，按需备份 + 定时备份）
-- 按需备份
-- 定时备份（Cron 表达式）
+**必选功能**：
+- 支持配置文件的动态修改和热加载
+- 支持配置模板和参数化
+- 支持配置校验和预检查
 
-**4.2 备份对象**
-- 数据备份（数据库 dump）
-- 配置文件备份
-- 关联元数据备份
-
-**4.3 一致性保证**
-- 平台提供冻结/解冻 API 供中间件插件实现一致性备份
-- PostgreSQL：使用 pg_dump 或 WAL 日志
-- Redis：使用 BGSAVE 或 RDB/AOF
-
-**4.4 恢复粒度**
-- 全量恢复
-- 恢复到指定备份点
-
-**4.5 存储后端**
-- K8s PVC（用户自备 StorageClass）
-- 对象存储（S3、MinIO、阿里云 OSS、腾讯云 COS 等）
-- NFS
-
-**4.6 生命周期管理**
-- 备份保留策略（按数量、按时间）
-- 备份过期自动清理
-- 备份加密（第一期暂不实现）
-
-**4.7 恢复范围**
-- **单集群内恢复（第一期）**
-- 跨集群恢复（暂不需要）
+**可选功能**：
+- 支持配置版本管理和回滚
 
 #### 技术洞察
-- **备份插件**：每种中间件实现备份接口，定义备份命令和恢复命令
-- **存储抽象**：定义 Storage Backend Interface，支持 PVC/S3/NFS 等多种后端
-- **一致性方案**：
-  - PostgreSQL：pg_dump + WAL
-  - Redis：BGSAVE + SYNC
-- **备份格式**：标准格式（tar.gz + checksum）
-- **工具建议**：可复用现有备份工具（pg_dump、redis-cli BGSAVE），避免重复造轮子
 
----
+1. **配置管理策略**：
+   - 使用Kubernetes ConfigMap存储配置文件
+   - 支持通过CRD的spec字段传递配置参数
+   - 使用模板引擎（如Go Template、CUE）渲染配置文件
 
-### 用户需求 5：监控
+2. **动态配置和热加载**：
+   - 监听ConfigMap变更，触发中间件重载
+   - 对于不支持热加载的中间件，触发滚动重启
+
+3. **配置校验**：
+   - 在CRD定义中使用validation规则（Kubernetes 1.16+支持）
+   - 实现Admission Webhook进行复杂校验
+   - 提供配置预检查接口，在应用前验证配置有效性
+
+4. **配置版本管理（可选）**：
+   - 使用Kubernetes的annotation记录配置版本
+   - 可以集成GitOps工具（如ArgoCD）实现配置版本管理
+   - 支持回滚到历史配置版本
+
+5. **敏感信息处理**：
+   - 使用Kubernetes Secret存储密码、密钥等敏感信息
+   - 通过环境变量或Volume挂载注入到Pod
+   - 使用配置模板中的占位符，运行时替换敏感信息
+
+### 用户需求5：扩展机制
 
 #### 需求详情
-**5.1 监控数据采集**
-- 对接 **Prometheus**（用户已有或自建）
-- 监控 Agent 容器暴露 Prometheus Metrics 端点（可选，第一期暂不实现）
-- Controller 生成 ServiceMonitor 或 PodMonitor CRD
 
-**5.2 监控指标范围**
-- 基础 Pod 指标（CPU、内存、磁盘、网络）- K8s 原生采集
-- 中间件业务指标（QPS、延迟、连接数等）- 监控 Agent 采集并暴露（可选）
+**'扩展方式**：
+- 采用配置驱动方式
+- 扩展粒度为整个中间件类型（如添加对Elasticsearch的支持）
 
-**5.3 告警功能**
-- **暂不实现**（第一期只实现监控采集，告警功能后续迭代）
+**扩展能力**：
+- 支持热加载（不重启平台就能加载新的扩展）
+- 扩展包的配置文件格式包括YAML、CUE、Go Template等
+- 需要扩展市场/扩展仓库的概念
+- 扩展包分发支持OCI镜像仓库，并考虑支持多种分发方式
 
 #### 技术洞察
-- **集成方案**：Prometheus Operator 生态（ServiceMonitor/PodMonitor）
-- **指标规范**：遵循 Prometheus 指标命名规范（中间件类型_指标名）
-- **预置指标**：每种中间件插件提供默认 Metrics 定义
-- **监控 Agent**：可选组件，负责采集并暴露中间件业务指标
 
----
+1. **配置驱动架构**：
+   -'定义扩展包的元数据格式（如manifest.yaml），描述中间件类型、版本、支持的配置参数等
+   - 扩展包包含中间件的CRD定义、部署模板（Helm Chart/Kustomize）、配置模板、监控指标定义等
+   - 平台根据扩展包动态注册CRD和加载配置模板
 
-### 用户需求 6：存储和网络
+2. **扩展包结构设计**：
+   ```
+   extension/
+   ├── manifest.yaml          # 扩展包元数据
+   ├── crd/                   # CRD定义
+   │   └── middleware.yaml
+   ├── templates/             # 配置和部署模板
+   │   ├── deployment.yaml
+   │   ├── service.yaml
+   │   └── configmap.yaml
+   ├── monitoring/            # 监控指标定义
+   │   └── metrics.yaml
+   └── scripts/              # 辅助脚本（可选）
+       ├── backup.sh
+       └── restore.sh
+   ```
+
+3. **热加载实现**：
+   - 监听扩展包目录或OCI'镜像仓库的变更
+   - 动态注册新的CRD到Kubernetes API Server
+   - 更新平台的配置模板缓存
+   - 可能需要重启Controller以加载新的CRD类型
+
+4. **OCI镜像仓库分发**：
+   - 将扩展包打包为OCI镜像（artifact type为middleware-extension）
+   - 使用标准的OCI registry（如Docker Hub、Harbor、阿里云ACR等）
+   - 支持版本标签和签名验证
+   - 使用oras工具或自定义客户端拉取扩展包
+
+5. **扩展市场/仓库**：
+   - 扩展市场可以是一个公开的Git仓库或简单的Web服务
+   - 提供扩展包的索引、搜索、元数据查询功能
+   - 支持用户提交和分享自定义扩展
+
+6. **多格式支持**：
+   - YAML：简单易读，适合配置定义
+   - CUE：强类型约束，适合复杂配置校验
+   - Go Template：灵活的模板渲染，适合动态配置生成
+   - 平台应支持多种格式，或提供转换机制
+
+### 用户需求6：备份和恢复
 
 #### 需求详情
-**6.1 存储需求**
-- 中间件数据存储：K8s PVC（块存储）
-  - 用户指定 StorageClass
-  - 支持在线存储扩容（依赖 StorageClass 支持 VolumeExpansion）
-  - 暂不支持本地存储（LocalPV）
-  - 暂不需要存储快照（通过备份实现数据保护）
-- 备份存储：对象存储（S3/MinIO/云存储）或 NFS
 
-**6.2 网络需求**
-- Service 类型：由中间件应用场景决定（ClusterIP/NodePort/LoadBalancer）
-- 网络模型：Overlay（默认）
-- 网络隔离：NetworkPolicy（可选项，用户按需配置）
-- DNS 特性：Headless Service、SRV 记录
+**备份能力**：
+- 支持全量备份和增量备份
+- 备份存储位置包括本地存储和对象存储（S3/OSS等）
+- 支持定时自动备份和手动触发备份
+- 支持备份恢复到指定时间点（PITR）
+- 支持备份的保留策略（保留多少个备份、保留多长时间）
 
-**6.3 准入和调度**
-- 节点亲和性：Pod Affinity/Anti-Affinity（用于跨节点、跨 AZ 部署）
-- 污点容忍：Taints 和 Tolerations（用于专有节点）
-- 资源配额：不限制（ResourceQuota 可由管理员自行配置）
-
-**6.4 命名空间**
-- 用户可指定中间件安装到哪个 Namespace
-
-**6.5 TLS 支持**
-- 平台提供通用的 TLS 支持，自动为中间件实例生成证书
-- TLS 加密以下通信：
-  - 客户端 ↔ 中间件
-  - 中间件 ↔ 中间件（复制通信）
-- 证书生成：集成 **CertManager** 自动生成证书
-- 证书挂载：以 Secret 方式挂载到中间件 Pod
-- 用户在 Application CRD 中通过配置字段启用 TLS
+**备份数据加密**：
+- 支持备份数据加密，由用户配置决定
 
 #### 技术洞察
-- **证书管理**：集成 CertManager，通过 Certificate CRD 自动生成和续期证书
-- **Secret 卷**：生成的证书以 Secret 形式存储，挂载到 Pod 的卷中
-- **中间件配置**：Agent 容器负责将证书路径和配置写入中间件配置文件
-- **StorageClass**：用户在 Application CRD 中指定 storageClassName
-- **存储扩容**：依赖 StorageClass 支持 VolumeExpansion
-- **Service 设计**：每种中间件根据场景创建对应的 Service
-- **Headless Service**：用于有状态应用的稳定网络标识
-- **拓扑分布**：通过 Pod Topology Spread Constraints 实现跨 AZ 分布
 
----
+1. **备份策略设计**：
+   - 全量备份：定期执行完整数据备份
+   - 增量备份：基于上次备份的变更数据，减少备份时间和存储空间
+   - 差异备份：基于上次全量备份的变更数据
 
-### 用户需求 7：高可用和故障恢复
+2. **存储后端**：
+   - 本地存储：使用PVC挂载到备份Pod
+   - 对象存储：支持S3兼容的存储服务（AWS S3、阿里云OSS、MinIO等）
+   - 使用CSI或S3 SDK实现统一的存储接口
+
+3. **备份调度**：
+   - 使用Kubernetes CronJob实现定时备份
+   - 支持Cron表达式定义备份计划
+   - 提供手动触发备份的接口（kubectl命令或Web界面操作）
+
+4. **PITR实现**：
+   - 对于支持WAL（Write-Ahead Log）的中间件（如PostgreSQL、MySQL），利用WAL日志实现时间点恢复
+   - 记录备份的时间戳和LSN（Log Sequence Number）
+   - 恢复时应用WAL日志到指定时间点
+
+5. **保留策略**：
+   - 基于数量：保留最近N个备份
+   - 基于时间：保留最近N天/周的备份
+   - 基于标签：保留特定标签的备份
+   - 自动清理过期的备份
+
+6. **备份加密**：
+   - 支持对称加密（AES-256）和非对称加密（RSA）
+   - 加密密钥可以存储在Kubernetes Secret中
+   - 支持使用KMS（Key Management Service）管理密钥
+
+7. **备份验证**：
+   - 提供备份完整性校验（checksum）
+   - 支持备份恢复测试（可选）
+
+### 用户需求7：监控和告警
 
 #### 需求详情
-**7.1 高可用设计**
-- 可用性级别由中间件部署拓扑决定（平台提供能力，用户决定配置）
-- 跨可用区（AZ）部署：支持
-- PodDisruptionBudget（PDB）：支持，可配置开关
-- HA 模式：
-  - 单机（开发/测试环境）
-  - 主从/副本（基础 HA）
-  - 多副本 + 自动故障转移（生产级 HA）
 
-**7.2 故障恢复机制**
-- **Pod 崩溃**：自动重启或重新调度
-- **Host 故障**：Pod 漂移到其他Host（数据由 PVC 保证）
-- **主节点故障**：依赖中间件自身机制（Redis Sentinel、PostgreSQL Streaming Replication），平台只监控状态
-- **存储故障**：通过备份恢复
-- **Controller 故障**：Controller 本身 HA（Deployment 多副本 + Leader Election）
+**监控**：
+- 使用Prometheus生态
+- 依赖集群中已有的Prometheus
+- 中间件实例暴露metrics endpoint，Prometheus直接抓取
+
+**告警**：
+- 平台根据用户配置，生成PrometheusRule CRD
+- 告警通知使用Prometheus Alertmanager
 
 #### 技术洞察
-- **Controller HA**：使用 K8s Lease 实现 Leader Election
-- **PDB**：每个 Component CRD 或 WorkloadSet CRD 可配置 PDB 规则（minAvailable/maxUnavailable）
-- **跨 AZ**：通过 topologyKey: topology.kubernetes.io/zone 实现
-- **故障检测**：Controller 定期检查 Pod/Service 状态，触发对应操作
 
----
+1. **Prometheus集成**：
+   - 中间件Pod暴露/metrics endpoint（使用Prometheus客户端库）
+   - 通过ServiceMonitor（Prometheus Operator）或Pod annotation配置Prometheus抓取
+   - 支持自定义监控指标
 
-### 用户需求 8：中间件扩展机制
+2. **监控指标类型**：
+   - Counter：计数器（如请求总数）
+   - Gauge：仪表盘（如当前连接数）
+   - Histogram：直方图（如请求延迟分布）
+   - Summary：摘要（如请求延迟的P50、P95、P99）
+
+3. **告警规则管理**：
+   - 定义告警规则模板（CPU使用率、内存使用率、连接数、QPS、延迟等）
+   - 用户通过CRD配置告警规则参数
+   - 平台生成PrometheusRule CRD，Prometheus Operator加载规则
+
+4. **Alertmanager集成**：
+   - 配置Alertmanager的接收器（receiver）和路由（route）
+   - 支持多种通知渠道：邮件、钉钉、企业微信、Slack、Webhook等
+   - 支持告警分组、抑制、静默等高级功能
+
+5. **告警级别**：
+   - Critical：严重告警，需要立即处理
+   - Warning：警告告警，需要关注
+   - Info：信息告警，仅记录
+
+6. **告警去重和聚合**：
+   - 利用Alertmanager的group_by和inhibit规则
+   - 避免告警风暴
+
+### 用户需求8：权限和多租户
 
 #### 需求详情
-通过插件注册配置（Plugin Registration Config）实现中间件扩展，新中间件只需注册插件即可接入，无需修改 Controller 代码。注册配置采用版本控制，确保配置的稳定性和可追溯性。
 
-**8.1 注册配置组成**
-每种中间件的注册配置由一组 ConfigMap 组成：
+**多租户**：
+- 不需要支持多租户
 
-| ConfigMap 类型 | 内容 | 说明 |
-|---------------|------|------|
-| **配置清单 ConfigMap** | 版本信息、支持的中间件版本、对其他 ConfigMap 的引用 | 每个中间件类型可能有多个配置清单 ConfigMap，代表不同的配置版本，中间件实例化时，需要在 CR 字段中明确指定所使用的配置清单版本 |
-| **Component 配置 ConfigMap** | Component 定义 | 定义 Component 的名称、镜像、资源规格、配置参数模板、副本数范围等 |
-| **Pod 模板 ConfigMap** | Pod 模板配置 | 定义 Pod 的规格、容器、环境变量等 |
-| **参数模板 ConfigMap** | PaaS 默认参数 | 中间件的配置参数默认值 |
-| **操作模板 ConfigMap** | 生命周期操作模板 | 定义 create/delete/scale 等操作的执行逻辑 |
-
-**Component 设计原则**：
-- 按运行的二进制划分 Component（Component 内所有 Pod 运行相同的中间件二进制）
-- 使用相同的资源配置和配置参数模板
-- 运行时角色由生命周期操作逻辑处理，状态通过状态 Agent 上报
-- 如果角色确定后保持不变，可按角色划分 Component（如 Kafka = broker + kraft）
-
-示例（Redis 注册配置）：
-```yaml
-# 示例：配置清单 ConfigMap
-redis-manifest-v1.0.0
-  supported-versions: "7.2,7.4"
-  allowed-upgrade-from: ""
-  components-ref: "redis-components-v1.0.0"
-  podtemplates-ref: "redis-podtemplates-v1.0.0"
-  params-ref: "redis-params-v1.0.0"
-  operations-ref: "redis-operations-v1.0.0"
-
-# 示例：其他 ConfigMap
-redis-components-v1.0.0      # 示例：Component 配置（如 redis-node，3 副本）
-redis-podtemplates-v1.0.0    # 示例：Pod 模板
-redis-params-v1.0.0          # 示例：参数模板
-redis-operations-v1.0.0      # 示例：操作模板
-```
-
-**8.2 配置格式**
-- 主要格式：**YAML**
-- 辅助格式：**CUE**（用于配置验证、模板约束、数据校验）
-
-**8.3 版本控制规则**
-- **版本唯一性**：每个版本一经发布不可修改（只增不改）
-- **版本格式**：语义化版本（如 v1.0.0, v1.1.0, v2.0.0）
-- **多版本支持**：一个注册配置版本可支持多个中间件版本（如 v1.0.0 支持 Redis 7.2, 7.4）
-- **向下兼容**：高版本支持低版本声明的部分或所有中间件版本来提供向下兼容
-
-**8.4 升级约束**
-- **注册配置版本升级**：必须从配置清单中 `allowed-upgrade-from` 声明的前置版本升级
-  - 例如：v2.0.0 的 `allowed-upgrade-from: "v1.0.0,v1.1.0"`
-  - 表示 v1.0.0 和 v1.1.0 都可以升级到 v2.0.0
-- **中间件版本升级**：必须在当前注册配置版本 `supported-versions` 声明的范围内
-
-**8.5 实例与版本绑定**
-- **创建实例**：用户在 Application CRD 中通过 `pluginVersion` 字段指定使用的注册配置版本
-- **实例迁移**：用户可选择将已有实例迁移到新版本，或保持当前版本不变
-- **版本锁定**：实例创建后使用固定版本的注册配置，中间件版本升级也受该版本约束
-
-**8.6 部署模式配置**
-- 注册配置定义中间件的 Component 构成（如 Redis = redis-node，Redis + Sentinel = redis-node + sentinel，Kafka = kafka-broker）
-- 注册配置定义每个 Component 的默认参数模板
-- Application CRD 实例通过组件字段指定使用哪些 Component 及副本数
-- 例如：PostgreSQL 集群可指定主库 x1，从库 x2
-
-**8.7 生命周期操作配置**
-- 注册配置使用**声明式配置**定义操作逻辑
-- 每种操作（create/delete/scale 等）在注册配置中定义步骤和命令模板
-- Controller 根据 CRD 状态和实际状态，在合适的时机执行操作
-- 执行时使用实际的参数值填充模板中的占位符
+**权限管理**：
+- 平台本身不实现权限管理
+- 依赖Kubernetes原生RBAC机制
 
 #### 技术洞察
-- **CUE 用途**：配置验证、模板约束、多版本配置管理
-- **ConfigMap 组织**：按中间件类型和版本命名（如 `redis-manifest-v1.0.0`）
-- **版本管理**：通过配置清单 ConfigMap 的 `supported-versions` 和 `allowed-upgrade-from` 实现版本约束
-- **声明式操作**：注册配置定义"做什么"，Controller 决定"何时做"和"怎么做"
-- **配置分层**：
-  - **注册配置**：定义中间件如何接入（Component 构成、操作模板、参数模板），版本受控
-  - **中间件运行时配置**：中间件自身的配置文件（redis.conf、postgresql.conf 等），由状态 Agent 管理（如 Reload 操作）
 
----
+1. **Kubernetes RBAC集成**：
+   - 用户通过kubectl操作时，权限由K8s RBAC控制
+   - Web界面通过K8s API Server进行认证授权
+   - 使用ServiceAccount Token或kubeconfig进行认证
 
-### 用户需求 9：多进程容器设计
+2. **资源隔离**：
+   - 使用Kubernetes Namespace进行逻辑隔离
+   - 不同Namespace的资源互不可见
+   - 通过NetworkPolicy实现网络隔离（可选）
+
+3. **无需多租户架构**：
+   - 简化架构设计，避免多租户相关的复杂性
+   - 专注于单租户场景的功能实现
+
+### 用户需求9：API和集成
 
 #### 需求详情
-为实现中间件进程重启时不重启 Pod，采用多进程容器架构：
 
-**9.1 多进程容器架构**
-- Pod 中包含一个**多进程容器**，运行进程管理器作为 1 号进程
-- 进程管理器负责管理中间件进程的启动、停止、重启、故障自动拉起
-- 进程管理器提供 **gRPC 服务**，供 Controller 调用执行重启等操作
+**API**：
+- 如果提供REST API，只会提供给Web界面使用
+- 目前不确定Web界面的开发过程中是否使用REST API
 
-**9.2 进程管理器职责**
-
-| 功能 | 说明 |
-|------|------|
-| 进程管理 | 启动、停止、重启中间件进程 |
-| 故障自动拉起 | 中间件进程异常退出后自动重新拉起 |
-| 健康检查 | 监控中间件进程状态 |
-| gRPC 服务 | 提供接口供外部调用（接收重启、重载等控制指令） |
-| 信号处理 | SIGHUP（日志轮转）、SIGTERM（优雅关闭）、SIGUSR1（重新加载配置）等 |
-
-**9.3 容器组成**
-
-| 容器 | 职责 |
-|------|------|
-| **多进程容器** | 1 号进程是进程管理器，管理中间件进程；提供 gRPC 服务接收控制指令 |
-| **状态 Agent 容器** | 轻量级 Sidecar，负责状态采集和上报，具体职责见"用户需求 3：Agent 容器设计" |
-
-**9.4 重启流程**
-- 用户请求重启或 Controller 检测到需要重启
-- Controller 通过 gRPC 调用进程管理器执行重启
-- 进程管理器重启中间件进程，不重启 Pod
+**集成**：
+- 暂不考虑与其他系统集成（如CI/CD、日志系统、配置中心等）
 
 #### 技术洞察
-- **进程管理器**：轻量级进程管理器（如 dumb-init 的扩展，或自定义实现）
-- **gRPC 服务**：Controller 与进程管理器之间的控制通道
-- **状态查询**：状态 Agent 通过本地命令行工具获取状态（redis-cli、pg_isready 等），不依赖 gRPC
-- **重启优势**：避免 Pod 重启带来的网络中断、数据迁移等开销
 
----
+1. **REST API设计（可选）**：
+   - 如果提供，遵循RESTful设计原则
+   - 使用JWT或Session进行认证（虽然Web界面本身不实现认证）
+   - 提供中间件CRD的CRUD操作接口
+   - 提供生命周期操作接口（启动、停止、扩缩容等）
 
-### 用户需求 10：统一操作入口与操作日志
+2. **无外部集成依赖**：
+   - 保持平台轻量级，不引入外部依赖
+   - 所有功能基于Kubernetes原生能力
+   - 用户可以通过kubectl和K8s API进行自定义集成
+
+### 用户需求10：运维和维护
 
 #### 需求详情
-引入新的 **Operation CRD**，作为对 PaaS 所有操作的统一入口和操作日志记录。相比 Application CRD，Operation CRD 更通用，支持多种操作类型。
 
-**10.1 API 操作方式**
-- 用户直接使用 kubectl YAML 操作 CRD
-- 创建/更新/删除 Application、Component、WorkloadSet、Operation 等资源
-- 无需额外的 API Server 或 kubectl 插件
+**平台部署**：
+- 支持Helm Chart部署
 
-**10.2 操作触发方式**
-- 用户创建 Operation CRD 实例触发操作（Operation 是统一操作入口）
-- 用户直接修改 Application/Component CRD 触发变更（如 replicas、resources）
-- Controller 监听 CRD 事件，自动执行 Reconcile 逻辑
+**平台升级**：
+- 主要考虑滚动升级
+- 其他升级方式（蓝绿部署等）作为可选项，优先级低
 
-**10.1 Operation CRD 职责**
+**平台健康检查和自愈**：
+- 不需要平台自身的健康检查和自愈
 
-| 功能 | 说明 |
-|------|------|
-| **统一操作入口** | 所有操作（生命周期管理、PaaS 专有操作、备份恢复等）都通过创建 Operation CRD 实例发起 |
-| **操作类型** | 支持 CRUD 操作（创建/更新/删除 Application）、gRPC 调用等多种操作 |
-| **操作日志记录** | 记录操作历史，包括操作类型、操作时间、操作参数、操作结果（不含操作者） |
-| **操作状态跟踪** | 记录操作进度、结果、失败原因，支持操作重试 |
+**平台日志和监控**：
+- 需要日志，直接在容器的stdout输出
 
-**10.2 Operation 步骤类型**
+**操作审计和事件记录**：
+- 需要提供平台级的操作审计日志
+- 需要提供事件记录（记录中间件实例的状态变化）
 
-每个 Operation 可包含多个步骤（Steps），步骤在注册配置中预先定义，Operation 通过引用操作模板执行。支持以下步骤类型：
-
-| 步骤类型 | 说明 | 示例 |
-|----------|------|------|
-| **CRD 资源操作** | 创建/更新/删除 Component、WorkloadSet 等自定义资源 | Create WorkloadSet、Delete Component |
-| **K8s 资源操作** | 创建/更新/删除 Pod、Service、ConfigMap、Secret 等原生 K8s 资源 | Create Service、Update ConfigMap |
-| **gRPC 调用** | 调用操作 Agent 执行特定操作 | Redis ACL 配置、Kafka Topic 配置 |
-
-**10.3 组合操作示例**
-- 多个步骤按配置顺序依次执行
-- 典型组合操作示例：**Failover**（停止主节点 → 提升从节点 → 更新状态）
-
-**10.4 Operation CRD 字段设计**
-
-> 以下为示例设计，具体实现时可能调整。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `spec.templateRef` | string | 引用的操作模板（在注册配置中定义） |
-| `spec.targetRef` | ObjectReference | 目标资源引用（Application 或其他） |
-| `spec.parameters` | map[string]string | 操作参数 |
-| `status.phase` | string | 操作状态（Pending/Running/Succeeded/Failed） |
-| `status.currentStep` | int | 当前执行到的步骤序号 |
-| `status.startTime` | time | 操作开始时间 |
-| `status.completionTime` | time | 操作完成时间 |
-| `status.error` | string | 失败原因 |
-
-**10.5 与其他 CRD 的关系**
-- Operation CRD 独立于 Application、Component、WorkloadSet
-- Operation 通过 `targetRef` 引用目标资源（通常是 Application）
-- Operation 通过 `templateRef` 引用注册配置中预定义的操作模板
-
-**10.6 操作日志保留策略**
-- 可配置的日志保留策略
-- 按时间保留（如保留最近 30 天）
-- 按数量保留（如保留最近 100 条）
-- 支持自动清理过期日志
-
-**10.7 操作触发方式**
-- 用户创建 Operation CRD 实例触发操作
-- Controller 监听 Operation 事件，按步骤顺序执行操作
-- 步骤执行结果更新到 Operation Status
+**诊断工具**：
+- 仅需要诊断平台本身的工具，优先级低
 
 #### 技术洞察
-- **操作入口统一**：所有操作通过 Operation CRD 发起，便于审计和追溯
-- **操作通用性**：Operation 支持 CRD 操作和 gRPC 调用，覆盖所有运维场景
-- **步骤编排**：通过注册配置预定义操作步骤，支持多步骤组合操作
-- **操作日志存储**：操作日志作为 Operation CRD 的实例存储在 etcd 中
-- **日志保留策略**：通过 TTL 或配额控制日志保留范围，避免 etcd 膨胀
-- **参考设计**：参考 Kubernetes Job/Event 的设计模式
 
----
+1. **Helm Chart部署**：
+   - 提供标准的Helm Chart，包含所有必要的Kubernetes资源
+   - 支持values.yaml自定义配置
+   - 遵循Helm最佳实践（使用命名模板、提供合理的默认值等）
 
-## 用户需求 11：日志管理
+2. **滚动升级**：
+   - 使用Kubernetes Deployment的滚动更新策略
+   - 配置maxSurge和maxUnavailable参数
+   - 支持健康检查（readinessProbe和livenessProbe）
+
+3. **蓝绿部署（可选）**：
+   - 可以使用Kubernetes原生方式实现（两个Deployment + Service selector切换）
+   - 不依赖外部服务（如Istio、Argo Rollouts）
+   - 作为可选项，优先级低
+
+4. **日志输出**：
+   - 平台组件（Controller、Web服务）的日志输出到stdout
+   - 使用结构化日志格式（如JSON），便于日志收集和分析
+   - 可以被K8s日志收集系统（如Fluentd、Logstash）收集
+
+5. **操作审计日志**：
+   - 记录用户的所有操作（创建、删除、修改、扩缩容等）
+   - 包含操作时间、操作用户、操作对象、操作结果等信息
+   - 可以输出到stdout或发送到审计日志系统
+
+6. **事件记录**：
+   - 使用Kubernetes Event记录中间件实例的状态变化
+   - 事件类型：Normal、Warning
+   - 事件原因：Created、Updated、Deleted、Scaled、Failed等
+
+7. **诊断工具（优先级低）**：
+   - 提供kubectl插件或Web界面诊断面板
+   - 检查平台Operator的健康状态
+   - 查看平台组件的资源使用情况（CPU、内存）
+   - 检查平台与K8s API Server的连接状态
+   - 查看平台的配置和运行状态
+
+### 用户需求11：安全性需求
 
 #### 需求详情
-**11.1 平台组件日志**
-- Controller 日志：通过标准输出（stdout）提供，用户自行通过 K8s 日志系统采集（如 Loki、EFK）
-- Agent 容器日志：作为中间件 Pod 的 Sidecar 容器，日志通过标准输出提供，用户自行采集
 
-**11.2 中间件访问日志**
-- 由用户在中间件配置中自行启用和配置
-- 平台不强制记录，但提供相应的存储卷挂载支持
-- 如需导出，由用户自行对接外部日志系统
+**TLS支持**：
+1. 自动为中间件实例生成CA证书和各节点证书、密钥
+2. 根据中间件实例的配置，自动生成中间件实例所需的其他TLS证书
+3. 自动或手动更新TLS证书
+4. Web界面支持HTTPS
+
+**数据安全**：
+- 敏感信息（如数据库密码、访问密钥）存放到K8s Secret
+- 备份数据支持加密（由用户配置决定）
+- 配置文件中的敏感信息通过环境变量或Volume挂载注入，或使用配置模板
+
+**访问安全**：
+- Web界面不需要认证，安全访问的功能由更上一级的平台提供
+
+**合规性**：
+- 暂不需要满足特定的安全合规要求（如等保、SOC2等）
+- 暂不需要安全审计报告
 
 #### 技术洞察
-- **日志采集方式**：所有组件日志通过 K8s 标准日志机制采集
-- **日志存储**：用户负责配置日志存储后端（EFK/Loki/云日志服务）
-- **Agent 日志**：Agent 容器的日志与中间件 Pod 日志一起采集
 
----
+1. **TLS证书管理**：
+   - 使用cert-manager或自研证书管理组件
+   - 实现CA证书的自动生成和轮换
+   - 支持为中间件实例自动签发证书
+   - 支持证书的自动续签和手动更新
+   - 证书和私钥存储在Kubernetes Secret中
 
-## 用户需求 12：多租户隔离和命名空间管理
+2. **Web界面HTTPS**：
+   - 使用Ingress配置TLS
+   - 支持自动证书管理（如Let's Encrypt）或用户自签名证书
+   - 支持TLS 1.2和TLS 1.3
 
-#### 需求详情
-**12.1 命名空间隔离**
-- 中间件实例部署在用户指定的 Kubernetes Namespace 中
-- 每个 Namespace 内的中间件实例相互隔离
-- 命名空间是资源隔离的基本单元
+3. **敏感信息存储**：
+   - 使用Kubernetes Secret存储密码、密钥等敏感信息
+   - 支持Secret的加密存储（K8s at-rest encryption）
+   - 通过环境变量或Volume挂载注入到Pod
+   - 使用配置模板中的占位符，运行时替换敏感信息
 
-**12.2 资源配额**
-- 平台层面不内置 ResourceQuota 限制
-- ResourceQuota 由管理员根据需要在 Kubernetes 层面自行配置
+4. **备份加密**：
+   - 支持对称加密（AES-256）和非对称加密（RSA）
+   - 加密密钥可以存储在Kubernetes Secret中
+   - 支持使用KMS（Key Management Service）管理密钥
+   - 用户可以通过配置选择是否加密备份数据
 
-**12.3 网络隔离**
-- 租户级别的网络隔离不在平台层面实现
-- 如有需要，由管理员通过 Kubernetes NetworkPolicy 自行配置
+5. **配置文件敏感信息处理**：
+   - 使用环境变量注入：通过Pod的env或envFrom字段
+   - 使用Volume挂载：将Secret挂载为文件
+   - 使用配置模板：在模板中使用占位符，运行时替换
+   - 避免在ConfigMap中直接存储敏感信息
 
-**12.4 跨命名空间管理**
-- 支持跨 Namespace 的资源管理视图
-- 管理员可以查看和管理任意 Namespace 内的中间件实例
-- 普通用户只能访问其指定的 Namespace
+6. **无认证依赖**：
+   - Web界面本身不实现认证，依赖更上一级的平台
+   - 通过反向代理或API Gateway实现认证
+   - 可以传递用户身份信息到Web界面
 
-#### 技术洞察
-- **隔离策略**：基于 Kubernetes Namespace 的软隔离
-- **管理权限**：通过 Kubernetes RBAC 控制谁能管理哪些 Namespace 的资源
-- **视图能力**：Controller 遍历所有 Namespace（受 RBAC 限制），收集资源状态
+7. **网络安全**：
+   - 使用NetworkPolicy实现Pod间的网络隔离
+   - 支持Service Mesh集成（可选）
+   - 支持Pod Security Policy（K8s 1.25之前）或Pod Security Standards（K8s 1.25+）
 
----
+8. **镜像安全**：
+   - 支持镜像签名验证（如Notary、cosign）
+   - 支持镜像漏洞扫描（可选）
+   - 使用最小权限原则运行容器
 
-## 用户需求 13：平台自身运维
-
-#### 需求详情
-**13.1 Controller 镜像升级**
-- 由用户控制升级时机，采用 Kubernetes 滚动更新策略
-- 用户通过 `kubectl set image` 或修改 Deployment 更新 Controller 镜像版本
-- Controller Deployment 配置 RollingUpdate 策略，逐个升级 Pod，对服务影响最小
-
-**13.2 注册配置管理**
-- 注册配置采用版本化管理，直接创建新版本（如 `redis-manifest-v2`），旧版本保留
-- 每个版本一经发布不可修改（遵循 8.4 版本控制规则）
-- 注册配置更新对 Controller 影响：
-  - Controller 持续监听所有注册配置 ConfigMap
-  - 新增注册配置版本时，Controller 自动感知，无需重启
-  - 现有实例继续使用其绑定的注册配置版本，不受影响
-  - 新实例可选择使用新版本或继续使用旧版本
-
-**13.3 Controller 健康检查**
-- Liveness Probe：检测 Controller 是否存活，失败则重启
-- Readiness Probe：检测 Controller 是否就绪，未就绪前不接受 Reconcile 请求
-
-#### 技术洞察
-- **Controller 升级**：利用 K8s Deployment 的滚动更新能力，用户完全控制升级时机
-- **注册配置隔离**：多版本注册配置并存，实例绑定固定版本，实现平滑升级
-- **热更新**：注册配置变更由 Controller 通过 Informer 机制自动感知，无需重启
-- **参考设计**：参考 Helm Chart 的版本管理方式
-
----
-
-## 用户需求 14：成本管理和优化（第一期可暂缓实现）
-
-#### 需求详情
-**14.1 成本统计**
-- 统计各 Namespace/用户的中间件资源使用量（CPU、内存、存储）
-- 生成资源使用报表，支持按时间维度查看
-- 便于运维团队了解资源消耗情况
-
-**14.2 闲置资源检测（可支持，优先级不高）**
-- 自动检测长期不活跃的中间件实例（如无连接、无操作的实例）
-- 提供闲置实例列表，提醒用户清理
-
-**14.3 自动扩缩容（可支持，优先级不高）**
-- HPA（Horizontal Pod Autoscaler）：根据 CPU/内存负载自动调整副本数
-- 时间维度扩缩容：根据时间计划自动调整资源（如非工作时间缩减非核心实例）
-
-#### 技术洞察
-- **成本统计**：通过 Prometheus 或 K8s Metrics Server 采集资源使用数据
-- **闲置检测**：基于连接数、操作日志等维度判断实例活跃度
-- **自动扩缩容**：利用 K8s HPA 机制，结合自定义指标实现
-- **实现优先级**：第一期可暂不实现，作为后续迭代功能
-
----
-
-## 用户需求 15：非阻塞编排（关键架构约束）
-
-#### 需求详情
-采用多层级 CRD 设计后，Controller 在编排中间件实例时，必须确保**不能阻塞其他中间件实例的编排**：
-
-| 约束项 | 说明 |
-|--------|------|
-| **Reconcile 并发处理** | 使用 K8s Workqueue + 多 Worker 并行处理，每个实例的 Reconcile 独立进行 |
-| **故障隔离** | 单个实例的 Reconcile 失败/超时不影响其他实例的处理，不产生级联阻塞 |
-| **资源限制** | 单个 Reconcile 过程有资源使用上限和超时控制（如 CPU、内存、超时时间） |
-| **K8s API 限流** | 遵守 K8s API Server 的 rate limit，不占用全部 API quota 留给其他请求 |
-
-**实现要点：**
-- 配置多个 Worker（如 5-10 个）并行处理 Reconcile 事件
-- 单个 Reconcile 设置超时（如 5-10 分钟），超时后跳过，避免长时间占用队列
-- K8s API 调用使用 client-go 的 rate limiter 控制请求速率
-- 错误和重试不影响队列中其他实例的处理
-
----
-
-## 技术约束和限制
-
-### 1. 轻量级要求
-- 平台本身不引入结构化数据库依赖
-- 所有状态存储在 K8s CRD 中
-- Controller 只依赖 K8s API 和 etcd
-
-### 2. 可扩展性要求
-- 新中间件接入无需修改 Controller 核心代码
-- 插件注册配置驱动，无需重新编译
-- 支持热更新（Controller 配置）和重启生效（中间件配置）两种模式
-
-### 3. 兼容性要求
-- K8s 版本兼容（建议 1.20+）
-- 中间件版本兼容策略
-- CRD 版本升级兼容性
-
-### 4. 第一期交付范围
-- Controller + API（不含 Web UI）
-- PostgreSQL + Redis 支持
-- 备份恢复（单集群内）
-- 监控采集（不含告警）
-
+9. **审计日志**：
+   - 记录所有敏感操作（创建、删除、修改配置等）
+   - 包含操作时间、操作用户、操作对象、操作结果等信息
+   - 可以输出到stdout或发送到审计日志系统
 
