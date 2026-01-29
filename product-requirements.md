@@ -12,7 +12,7 @@
 | 自定义资源定义 | CRD (Custom Resource Definition) |
 | 运算符 | Operator |
 | 命令行接口 | CLI (Command Line Interface) |
-| 基于角色的访问控制 | RBAC (Role-Based) |
+| 基于角色的访问控制 | RBAC (Role-Based Access Control) |
 | 传输层安全 | TLS (Transport Layer Security) |
 | 证书颁发机构 | CA (Certificate Authority) |
 | 开放容器倡议 | OCI (Open Container Initiative) |
@@ -110,7 +110,7 @@
 
 2. **生命周期操作实现**：
    - **create/delete**：通过K8s Deployment/StatefulSet管理Pod，通过Service/Ingress暴露服务
-   - **vertical-scale-resource****：修改Deployment/StatefulSet的resources字段
+   - **vertical-scale-resource**：修改Deployment/StatefulSet的resources字段
    - **vertical-scale-volume**：修改PVC/StorageClass，可能需要数据迁移
    - **horizontal-scale**：修改Deployment的replicas字段或StatefulSet的replicas字段
    - **stop/start/restart**：通过修改Deployment的replicas为0或原值，或发送信号给进程
@@ -168,7 +168,7 @@
 
 #### 需求详情
 
-**'扩展方式**：
+**扩展方式**：
 - 采用配置驱动方式
 - 扩展粒度为整个中间件类型（如添加对Elasticsearch的支持）
 
@@ -181,7 +181,7 @@
 #### 技术洞察
 
 1. **配置驱动架构**：
-   -'定义扩展包的元数据格式（如manifest.yaml），描述中间件类型、版本、支持的配置参数等
+   - 定义扩展包的元数据格式（如manifest.yaml），描述中间件类型、版本、支持的配置参数等
    - 扩展包包含中间件的CRD定义、部署模板（Helm Chart/Kustomize）、配置模板、监控指标定义等
    - 平台根据扩展包动态注册CRD和加载配置模板
 
@@ -203,7 +203,7 @@
    ```
 
 3. **热加载实现**：
-   - 监听扩展包目录或OCI'镜像仓库的变更
+   - 监听扩展包目录或OCI镜像仓库的变更
    - 动态注册新的CRD到Kubernetes API Server
    - 更新平台的配置模板缓存
    - 可能需要重启Controller以加载新的CRD类型
