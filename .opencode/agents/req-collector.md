@@ -5,6 +5,7 @@ tools:
   "todowrite": true
   "todoread": true
   "write": true
+  "read": true
 ---
 
 # 角色
