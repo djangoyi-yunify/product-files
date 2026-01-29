@@ -104,7 +104,8 @@
 #### 技术洞察
 
 1. **Kubernetes Operator模式**：
-   - 每个中间件类型对应一个CRD定义
+   - 使用一个或多个通用CRD负责所有类型中间件的编排
+   - 通用CRD通过type字段标识中间件类型，通过spec字段传递中间件特定的配置
    - 实现Reconciliation Loop，持续监控CRD状态并调整实际状态
    - 使用Finalizer机制处理资源清理和依赖关系
 
@@ -182,15 +183,13 @@
 
 1. **配置驱动架构**：
    - 定义扩展包的元数据格式（如manifest.yaml），描述中间件类型、版本、支持的配置参数等
-   - 扩展包包含中间件的CRD定义、部署模板（Helm Chart/Kustomize）、配置模板、监控指标定义等
-   - 平台根据扩展包动态注册CRD和加载配置模板
+   - 扩展包包含中间件的部署模板（Helm Chart/Kustomize）、配置模板、监控指标定义、生命周期操作脚本等
+   - 平台加载扩展包后，通过通用CRD的type字段引用中间件类型，无需动态注册新的CRD
 
 2. **扩展包结构设计**：
    ```
    extension/
    ├── manifest.yaml          # 扩展包元数据
-   ├── crd/                   # CRD定义
-   │   └── middleware.yaml
    ├── templates/             # 配置和部署模板
    │   ├── deployment.yaml
    │   ├── service.yaml
@@ -202,24 +201,30 @@
        └── restore.sh
    ```
 
-3. **热加载实现**：
-   - 监听扩展包目录或OCI镜像仓库的变更
-   - 动态注册新的CRD到Kubernetes API Server
-   - 更新平台的配置模板缓存
-   - 可能需要重启Controller以加载新的CRD类型
+3. **通用CRD设计**：
+   - 通用CRD（如Middleware）包含type字段标识中间件类型（如redis、mysql、kafka等）
+   - spec字段包含中间件特定的配置参数（资源、副本、版本等）
+   - 平台控制器根据type字段加载对应的扩展包，使用扩展包中的模板渲染Kubernetes资源
+   - 用户通过kubectl apply创建中间件实例时，指定type字段即可
 
-4. **OCI镜像仓库分发**：
+4. **热加载实现**：
+   - 监听扩展包目录或OCI镜像仓库的变更
+   - 加载新的扩展包到平台的扩展包缓存
+   - 更新平台的配置模板缓存
+   - 无需重启Controller，用户即可通过通用CRD创建新类型的中间件实例
+
+5. **OCI镜像仓库分发**：
    - 将扩展包打包为OCI镜像（artifact type为middleware-extension）
    - 使用标准的OCI registry（如Docker Hub、Harbor、阿里云ACR等）
    - 支持版本标签和签名验证
    - 使用oras工具或自定义客户端拉取扩展包
 
-5. **扩展市场/仓库**：
+6. **扩展市场/仓库**：
    - 扩展市场可以是一个公开的Git仓库或简单的Web服务
    - 提供扩展包的索引、搜索、元数据查询功能
    - 支持用户提交和分享自定义扩展
 
-6. **多格式支持**：
+7. **多格式支持**：
    - YAML：简单易读，适合配置定义
    - CUE：强类型约束，适合复杂配置校验
    - Go Template：灵活的模板渲染，适合动态配置生成
