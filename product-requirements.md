@@ -99,6 +99,8 @@
 - **FR-008**: 系统必须支持运行时管理静态分组和动态分组，包括添加、删除、修改
 - **FR-009**: 系统必须定义通用生命周期REST API接口，扩展可选择性实现；其中升级相关接口分为扩展版本升级和中间件版本升级两套独立API，扩展版本升级使用pre-extension-upgrade、post-extension-upgrade、pre-extension-rollback、post-extension-rollback，中间件版本升级使用pre-middleware-upgrade、post-middleware-upgrade、pre-middleware-rollback、post-middleware-rollback
 - **FR-010**: 系统必须通过Headless Service同步调用扩展提供的生命周期API
+- **FR-034**: 系统必须提供可配置的通用生命周期API Server，扩展通过配置声明其实现的生命周期API列表以及每个API对应的执行脚本或命令路径，API Server通过调用配置指定的脚本或命令来处理生命周期请求
+- **FR-035**: 生命周期API Server必须提供能力发现接口（capabilities），返回当前扩展实现的所有生命周期API列表及其配置信息
 - **FR-011**: 系统必须在每个中间件Pod的主容器内运行进程管理器（PID 1），负责中间件进程的完整生命周期管理，进程管理器支持systemd类似功能
 - **FR-012**: 系统必须支持通过REST API对单个Pod执行进程启动操作，进程管理器在主容器内启动新的中间件进程，Pod不重启
 - **FR-013**: 系统必须支持通过REST API对单个Pod执行进程停止操作，支持优雅停止（SIGTERM）和强制停止（SIGKILL）两种模式，用户可配置优雅停止超时时间
