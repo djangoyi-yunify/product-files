@@ -97,10 +97,8 @@
 - **FR-006**: ExPodSet 必须支持指定滚动重启顺序，通过调用Pod REST API获取重启序列
 - **FR-007**: 系统必须支持静态分组和动态分组的拓扑抽象，静态分组定义Pod模板，动态分组管理具体副本
 - **FR-008**: 系统必须支持运行时管理静态分组和动态分组，包括添加、删除、修改
-- **FR-009**: 系统必须定义通用生命周期REST API接口，扩展可选择性实现；其中升级相关接口分为扩展版本升级和中间件版本升级两套独立API，扩展版本升级使用pre-extension-upgrade、post-extension-upgrade、pre-extension-rollback、post-extension-rollback，中间件版本升级使用pre-middleware-upgrade、post-middleware-upgrade、pre-middleware-rollback、post-middleware-rollback
-- **FR-010**: 系统必须通过Headless Service同步调用扩展提供的生命周期API
-- **FR-034**: 系统必须提供可配置的通用生命周期API Server，扩展通过配置声明其实现的生命周期API列表以及每个API对应的执行脚本或命令路径，API Server通过调用配置指定的脚本或命令来处理生命周期请求
-- **FR-035**: 生命周期API Server必须提供能力发现接口（capabilities），返回当前扩展实现的所有生命周期API列表及其配置信息
+- **FR-009**: 系统必须定义通用生命周期REST API接口规范，包括pre-extension-upgrade、post-extension-upgrade、pre-extension-rollback、post-extension-rollback、pre-middleware-upgrade、post-middleware-upgrade、pre-middleware-rollback、post-middleware-rollback、pre-scale-in、post-scale-out、health-check等
+- **FR-010**: 扩展必须提供可配置的生命周期API Server，该Server实现系统定义的通用生命周期REST API接口；扩展通过配置声明该Server实现了哪些生命周期能力，以及每个API被调用时执行的具体脚本或命令
 - **FR-011**: 系统必须在每个中间件Pod的主容器内运行进程管理器（PID 1），负责中间件进程的完整生命周期管理，进程管理器支持systemd类似功能
 - **FR-012**: 系统必须支持通过REST API对单个Pod执行进程启动操作，进程管理器在主容器内启动新的中间件进程，Pod不重启
 - **FR-013**: 系统必须支持通过REST API对单个Pod执行进程停止操作，支持优雅停止（SIGTERM）和强制停止（SIGKILL）两种模式，用户可配置优雅停止超时时间
@@ -124,6 +122,11 @@
 - **FR-031**: 系统在执行中间件版本升级前，必须通过pre-middleware-upgrade生命周期API执行兼容性检查和数据备份确认
 - **FR-032**: 系统在执行中间件版本升级后，必须通过post-middleware-upgrade生命周期API验证集群功能正常，验证失败支持自动或手动回滚
 - **FR-033**: 系统必须支持扩展版本升级和中间件版本升级的独立执行，两者可以分别进行，互不影响
+- **FR-034**: 扩展的生命周期API Server必须通过配置映射表声明实现的生命周期API与执行命令的对应关系，格式为"API路径→执行命令/脚本"
+- **FR-035**: 扩展的生命周期API Server必须提供能力发现端点（如/capabilities），返回该扩展实现的所有生命周期API列表，系统通过调用此端点获知扩展的能力
+- **FR-036**: 扩展的生命周期API Server收到系统调用请求后，必须执行配置映射表中对应的脚本或命令，并将执行结果（成功/失败、输出信息）返回给系统
+- **FR-037**: 系统必须通过Headless Service同步调用扩展提供的生命周期API，调用超时时间和重试策略可配置
+- **FR-038**: 扩展的生命周期API Server必须支持标准HTTP状态码（200表示成功，4xx/5xx表示失败）和JSON格式的响应体，包含执行状态、消息和可选的详细数据
 
 ### 关键数据实体
 
@@ -134,6 +137,7 @@
 - **ENTITY-5**: BackupPolicy（备份策略），定义自动备份的调度规则、保留策略，由用户配置
 - **ENTITY-6**: BackupRecord（备份记录），代表一次备份的结果，包含备份类型、时间、存储位置、状态
 - **ENTITY-7**: ProcessManagerConfig（进程管理器配置），定义进程管理器的行为参数，包括自动拉起策略、优雅停止超时时间、健康检查配置、信号映射规则
+- **ENTITY-8**: LifecycleAPIConfig（生命周期API配置），定义扩展实现的生命周期API与执行命令的映射关系，包含API路径、执行命令/脚本、超时时间、重试策略
 
 ## 成功标准
 
