@@ -101,7 +101,7 @@
 - **FR-009**: 系统必须支持运行时管理静态分组和动态分组，包括添加、删除、修改
 - **FR-010**: 系统必须定义通用生命周期REST API接口规范，包括pre-extension-upgrade、post-extension-upgrade、pre-extension-rollback、post-extension-rollback、pre-middleware-upgrade、post-middleware-upgrade、pre-middleware-rollback、post-middleware-rollback、pre-scale-in、post-scale-out、health-check等
 - **FR-011**: 平台必须提供通用的、可配置的生命周期API Server镜像（Generic Lifecycle API Server），该Server实现系统定义的所有通用生命周期REST API接口；扩展开发者基于该镜像制作扩展专用镜像，只需拷贝中间件专用脚本并配置API到脚本的映射关系，无需自行实现HTTP Server
-- **FR-012**: 系统必须在每个中间件Pod的主容器内运行进程管理器（PID 1），负责中间件进程的完整生命周期管理，进程管理器支持systemd类似功能
+- **FR-012**: 平台必须提供进程管理器基础镜像（Generic Process Manager），支持systemd类似功能（自动拉起、信号转发、配置热更新）；扩展基于此镜像制作主容器镜像，只需提供中间件启动命令和进程管理器配置文件
 - **FR-013**: 系统必须支持通过REST API对单个Pod执行进程启动操作，进程管理器在主容器内启动新的中间件进程，Pod不重启
 - **FR-014**: 系统必须支持通过REST API对单个Pod执行进程停止操作，支持优雅停止（SIGTERM）和强制停止（SIGKILL）两种模式，用户可配置优雅停止超时时间
 - **FR-015**: 系统必须支持通过REST API对单个Pod执行进程重启操作，由进程管理器执行停止后启动，新进程获得新PID，Pod和容器不重启
@@ -132,7 +132,7 @@
 - **ENTITY-4**: DynamicGroup（动态分组），代表一个ExPodSet实例，包含副本数、特定配置覆盖、状态信息
 - **ENTITY-5**: BackupPolicy（备份策略），定义自动备份的调度规则、保留策略，由用户配置
 - **ENTITY-6**: BackupRecord（备份记录），代表一次备份的结果，包含备份类型、时间、存储位置、状态
-- **ENTITY-7**: ProcessManagerConfig（进程管理器配置），定义进程管理器的行为参数，包括自动拉起策略、优雅停止超时时间、健康检查配置、信号映射规则
+- **ENTITY-7**: ProcessManagerConfig（进程管理器配置），由扩展提供，定义进程管理器的行为参数，包括自动拉起策略、优雅停止超时时间、健康检查配置、信号映射规则；平台提供的进程管理器基础镜像读取此配置处理进程生命周期
 - **ENTITY-8**: LifecycleAPIConfig（生命周期API配置），由扩展提供，定义扩展实现的生命周期API与执行命令的映射关系，包含API路径、执行命令/脚本、超时时间、重试策略；通用生命周期API Server读取此配置处理请求
 
 ## 成功标准
@@ -159,7 +159,7 @@
 - 有可用的对象存储用于备份数据
 - 扩展开发者熟悉Kubernetes CRD和Operator模式
 - 所有中间件镜像都遵循容器化最佳实践，支持信号处理
-- 中间件Pod的主容器使用进程管理器作为PID 1，进程管理器支持systemd类似功能（自动拉起、信号转发、配置热更新）；当进程管理器收到停止信号时，会将信号转发给中间件进程并等待其优雅退出
+- 中间件Pod的主容器基于平台提供的进程管理器基础镜像构建，进程管理器作为PID 1运行，支持systemd类似功能（自动拉起、信号转发、配置热更新）；当进程管理器收到停止信号时，会将信号转发给中间件进程并等待其优雅退出
 
 ## 约束
 
